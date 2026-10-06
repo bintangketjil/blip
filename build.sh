@@ -11,7 +11,7 @@ cmd=()
 
 cc=("gcc")
 optimize=("-O2")
-debug=("-g" "-fsanitize=address,undefined" "-fno-omit-frame-pointer")
+debug=("-Wall" "-Wpedantic")
 path_include=("-I/usr/local/include")
 path_lib=("-L/usr/local/lib")
 linker=("-lraylib" "-lm" "-lGL" "-lX11" "-lpthread")
@@ -26,7 +26,7 @@ if [[ -f "$input" ]]; then
     fi
 
     cmd+=("${optimize[@]}")
-    # cmd+=("${debug[@]}")
+    cmd+=("${debug[@]}")
     cmd+=("${path_include[@]}")
     cmd+=("${path_lib[@]}")
     cmd+=("${linker[@]}")
