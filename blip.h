@@ -29,7 +29,7 @@ typedef struct {
 } Framebuffer;
 
 
-// ++++ View modes +++++
+// ++++ View mode +++++
 typedef enum {
     BLIP_VIEW_FILL,
     BLIP_VIEW_WIRE,
@@ -37,6 +37,25 @@ typedef enum {
 } BlipView;
 
 void blip_set_view(BlipView mode);
+
+
+// ++++ Fill mode +++++
+typedef enum {
+    BLIP_FILL_FLAT,
+    BLIP_FILL_GRADIENT
+} BlipFillMode;
+
+typedef struct {
+    BlipFillMode mode;
+    union {
+        struct { ColorRGB color; } flat;
+        struct {
+            Point p0, p1;
+            ColorRGB *stops;
+            int stop_count;
+        } gradient;
+    };
+} FillParams;
 
 
 // ++++ Framebuffer +++++
