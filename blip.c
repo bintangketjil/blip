@@ -6,8 +6,110 @@
 #include "blip.h"
 
 
-// ++++ Framebuffer +++++
-Framebuffer blip_init_fb(int width, int height, ColorRGB *pixels) {
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Bayer Matrices +++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+static const uint8_t bayer4[4][4] = {
+    { 0,  8,  2, 10 },
+    { 12, 4, 14, 6  },
+    { 3, 11, 1,  9  },
+    { 15, 7, 13, 5  }
+};
+
+static const uint8_t bayer8[8][8] = {
+    { 0,  32, 8,  40, 2,  34, 10, 42 },
+    { 48, 16, 56, 24, 50, 18, 58, 26 },
+    { 12, 44, 4,  36, 14, 46, 6,  38 },
+    { 60, 28, 52, 20, 62, 30, 54, 22 },
+    { 3,  35, 11, 43, 1,  33, 9,  41 },
+    { 51, 19, 59, 27, 49, 17, 57, 25 },
+    { 15, 47, 7,  39, 13, 45, 5,  37 },
+    { 63, 31, 55, 23, 61, 29, 53, 21 }
+};
+
+
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Colors +++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+static ColorRGB lerp_color(ColorRGB a, ColorRGB b, float k)
+{
+    return (ColorRGB) {
+        (uint8_t)(a.r + (b.r - a.r) * k + 0.5f),
+        (uint8_t)(a.g + (b.g - a.g) * k + 0.5f),
+        (uint8_t)(a.b + (b.b - a.b) * k + 0.5f),
+        (uint8_t)(a.a + (b.a - a.a) * k + 0.5f),
+    };
+}
+
+void generate_ramp(ColorRGB a, ColorRGB b, int steps, ColorRGB *out)
+{
+    if (steps < 1 || !out) return;
+    if (steps == 1) {
+        out[0] = a;
+        return;
+    }
+    for (int i = 0; i < steps; i++) {
+        float t = (float)i / (steps - 1);
+        out[i] = lerp_color(a, b, t);
+    }
+}
+
+static ColorRGB gradient_color(const FillParams *fp, int x, int y)
+{
+    const ColorRGB *s = fp->gradient.stops;
+    int n = fp->gradient.stop_count;
+    if (!s || n < 1) return BLIP_ERROR; // something is wrong
+    if (n == 1) return s[0];
+
+    int ax = fp->gradient.p1.x - fp->gradient.p0.x;
+    int ay = fp->gradient.p1.y - fp->gradient.p0.y;
+    float len2 = (float)(ax * ax + ay * ay);
+
+    float t = 0.0f;
+    if (len2 > 0.0f) {
+        int dx = x - fp->gradient.p0.x;
+        int dy = y - fp->gradient.p0.y;
+        t = (dx * ax + dy * ay) / len2;
+    }
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    float f = t * (n - 1);
+    int i = (int)f;
+    if (i > n - 2) i = n - 2;   // t == 1 lands on the last pair
+    return lerp_color(s[i], s[i + 1], f - i);
+}
+
+static ColorRGB dither_color(const FillParams *fp, int x, int y)
+{
+    float thresh = bayer_threshold(x, y, fp->dither.matrix_size, fp->dither.seed);
+    // Simple 50% threshold - could be parameterized later
+    return (thresh < 0.5f) ? fp->dither.color0 : fp->dither.color1;
+}
+
+static ColorRGB pixel_color(const FillParams *fp, int x, int y)
+{
+    switch (fp->mode) {
+    case BLIP_FILL_FLAT:
+        return fp->flat.color;
+    case BLIP_FILL_GRADIENT:
+        return gradient_color(fp, x, y);
+    case BLIP_FILL_DITHER:
+        return dither_color(fp, x, y);
+    case BLIP_FILL_FALLBACK:
+        if (!fp->fallback.fn) return BLIP_ERROR;
+        return fp->fallback.fn(x, y, fp->fallback.ctx);
+    }
+
+    return BLIP_ERROR;
+}
+
+
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Framebuffer ++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+Framebuffer blip_init_fb(int width, int height, ColorRGB *pixels)
+{
     Framebuffer fb = {
         .width = width,
         .height = height,
@@ -16,25 +118,29 @@ Framebuffer blip_init_fb(int width, int height, ColorRGB *pixels) {
     return fb;
 }
 
-void blip_clear_fb(Framebuffer *fb, ColorRGB color) {
+void blip_clear_fb(Framebuffer *fb, ColorRGB color)
+{
     for (int i = 0; i < fb->width * fb->height; i++) {
         fb->pixels[i] = color;
     }
 }
 
 
-// ++++ Pixel +++++
-static inline int in_bound(const Framebuffer *fb, int x, int y) {
+// ++++ Pixel ++++
+static inline int in_bound(const Framebuffer *fb, int x, int y)
+{
     return x >= 0 && x < fb->width && y >= 0 && y < fb->height;
 }
 
-void blip_put_pixel(Framebuffer *fb, int x, int y, ColorRGB color) {
+void blip_put_pixel(Framebuffer *fb, int x, int y, ColorRGB color)
+{
     if (!in_bound(fb, x, y)) return;
 
     fb->pixels[y * fb->width + x] = color;
 }
 
-ColorRGB blip_get_pixel(const Framebuffer *fb, int x, int y) {
+ColorRGB blip_get_pixel(const Framebuffer *fb, int x, int y)
+{
     if (!in_bound(fb, x, y)) {
         return (ColorRGB) {
             0, 0, 0, 0
@@ -45,15 +151,19 @@ ColorRGB blip_get_pixel(const Framebuffer *fb, int x, int y) {
 }
 
 
-// ++++ Draw +++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Draw ++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
 static BlipView g_view = BLIP_VIEW_FILL;
 
-void blip_set_view(BlipView mode) {
+void blip_set_view(BlipView mode)
+{
     g_view = mode;
 }
 
 
-void blip_draw_line(Framebuffer *fb, Point a, Point b, ColorRGB color) {
+void blip_draw_line(Framebuffer *fb, Point a, Point b, ColorRGB color)
+{
     // Bresenham line, all octants.
     //
     // dx = |x1 - x0|, dy = -|y1 - y0|, sx/sy = step direction.
@@ -94,7 +204,8 @@ void blip_draw_line(Framebuffer *fb, Point a, Point b, ColorRGB color) {
     }
 }
 
-void blip_draw_rect(Framebuffer *fb, Point origin, int w, int h, ColorRGB color) {
+void blip_draw_rect(Framebuffer *fb, Point origin, int w, int h, ColorRGB color)
+{
     // size is the number of pixels covered,
     // so rect at (0,0) with w 10, h 10 covers pixels 0-9
     if (!fb) return;
@@ -127,7 +238,8 @@ void blip_draw_rect(Framebuffer *fb, Point origin, int w, int h, ColorRGB color)
     }, color); // left
 }
 
-void blip_draw_path(Framebuffer *fb, const Point *pts, int count, bool closed, ColorRGB color) {
+void blip_draw_path(Framebuffer *fb, const Point *pts, int count, bool closed, ColorRGB color)
+{
     if (!fb || !pts) return;
 
     if (count < 1) return;
@@ -146,20 +258,23 @@ void blip_draw_path(Framebuffer *fb, const Point *pts, int count, bool closed, C
     }
 }
 
-void blip_draw_tri(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color) {
+void blip_draw_tri(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color)
+{
     if (!fb) return;
 
     Point pts[3] =  {a, b, c};
     blip_draw_path(fb, pts, 3, true, color);
 }
 
-void blip_draw_poly(Framebuffer *fb, const Point *pts, int count, ColorRGB color) {
+void blip_draw_poly(Framebuffer *fb, const Point *pts, int count, ColorRGB color)
+{
     if (!fb || pts == NULL) return;
 
     blip_draw_path(fb, pts, count, true, color);
 }
 
-void blip_draw_circle(Framebuffer *fb, Point c, int r, ColorRGB color) {
+void blip_draw_circle(Framebuffer *fb, Point c, int r, ColorRGB color)
+{
     // Midpoint circle. Walk one octant from (0, r) to x == y,
     // mirror each point into all 8 octants.
     // d is f(x+1, y-1/2) = (x+1)^2 + (y-1/2)^2 - r^2, scaled to integers:
@@ -191,7 +306,8 @@ void blip_draw_circle(Framebuffer *fb, Point c, int r, ColorRGB color) {
     }
 }
 
-void circle_by_angle(Framebuffer *fb, Point c, float r, int n, ColorRGB color) {
+void circle_by_angle(Framebuffer *fb, Point c, float r, int n, ColorRGB color)
+{
     if (!fb || n < 1) return;
 
     Point pts[n];
@@ -206,10 +322,12 @@ void circle_by_angle(Framebuffer *fb, Point c, float r, int n, ColorRGB color) {
 }
 
 
-// ++++ Shapes +++++
-static void hline(Framebuffer *fb, int x0, int x1, int y, ColorRGB color) {
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Shapes ++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+static void hline(Framebuffer *fb, int x0, int x1, int y, ColorRGB color)
+{
     if (!fb || !fb->pixels) return;
-
     if (y < 0 || y >= fb->height) return;
 
     if (x0 > x1) {
@@ -219,17 +337,38 @@ static void hline(Framebuffer *fb, int x0, int x1, int y, ColorRGB color) {
     }
 
     if (x0 < 0) x0 = 0;
-
     if (x1 >= fb->width) x1 = fb->width - 1;
-
     if (x0 > x1) return;
 
     ColorRGB *row = fb->pixels + y * fb->width;
-
     for (int x = x0; x <= x1; x++) row[x] = color;
 }
 
-static int edge_x(Point a, Point b, int y) {
+static void hline_fill(Framebuffer *fb, int x0, int x1, int y, const FillParams *fp)
+{
+    if (!fp) return;
+    if (fp->mode == BLIP_FILL_FLAT) {
+        hline(fb, x0, x1, y, fp->flat.color);
+        return;
+    }
+
+    if (!fb || !fb->pixels || y < 0 || y >= fb->height) return;
+    if (x0 > x1) {
+        int t = x0;
+        x0 = x1;
+        x1 = t;
+    }
+    if (x0 < 0) x0 = 0;
+    if (x1 >= fb->width) x1 = fb->width - 1;
+
+    ColorRGB *row = fb->pixels + y * fb->width;
+    for (int x = x0; x <= x1; x++) {
+        row[x] = pixel_color(fp, x, y);
+    }
+}
+
+static int edge_x(Point a, Point b, int y)
+{
     // x where edge a->b crosses row y. Requires a.y < b.y
     if (a.y == b.y) return a.x;
 
@@ -237,40 +376,60 @@ static int edge_x(Point a, Point b, int y) {
     return a.x + (int)floorf((b.x - a.x) * t + 0.5f);
 }
 
-static void fill_rect_spans(Framebuffer *fb, Point origin, int w, int h, ColorRGB color) {
-    if (!fb || w <= 0 || h <= 0) return;
+static ColorRGB wire_color(const FillParams *fp)
+{
+    if (fp->mode == BLIP_FILL_FLAT) return fp->flat.color;
+    if (fp->mode == BLIP_FILL_DITHER) return fp->dither.color0;
+    return BLIP_INK;
+}
+
+
+// ++++ fill_rect ++++
+static void fill_rect_spans(Framebuffer *fb, Point origin, int w, int h, const FillParams *fp)
+{
+    if (!fb || !fp || w <= 0 || h <= 0) return;
 
     int y0 = origin.y < 0 ? 0 : origin.y;
     int y1 = origin.y + h > fb->height ? fb->height : origin.y + h;
 
     for (int y = y0; y < y1; y++) {
-        hline(fb, origin.x, origin.x + w - 1, y, color);
+        hline_fill(fb, origin.x, origin.x + w - 1, y, fp);
     }
 }
 
-void blip_fill_rect(Framebuffer *fb, Point origin, int w, int h, ColorRGB color) {
+void blip_fill_rect_ex(Framebuffer *fb, Point origin, int w, int h, const FillParams *fp)
+{
+    if (!fb || !fp) return;
+
     if (g_view == BLIP_VIEW_WIRE) {
-        blip_draw_rect(fb, origin, w, h, (ColorRGB) {
-            255, 0, 0, 255
-        });
+        blip_draw_rect(fb, origin, w, h, wire_color(fp));
         return;
     }
 
-    fill_rect_spans(fb, origin, w, h, color);
+    fill_rect_spans(fb, origin, w, h, fp);
 }
 
-static void fill_circle_spans(Framebuffer *fb, Point c, int r, ColorRGB color) {
-    if (!fb || r < 0) return;
+void blip_fill_rect(Framebuffer *fb, Point origin, int w, int h, ColorRGB color)
+{
+    FillParams fp = blip_flat(color);
+    blip_fill_rect_ex(fb, origin, w, h, &fp);
+}
+
+
+// ++++ fill_circle
+static void fill_circle_spans(Framebuffer *fb, Point c, int r, const FillParams *fp)
+{
+    if (!fb || !fp|| r < 0) return;
 
     int x = 0;
     int y = r;
     int d = 1 - r;
 
     while (x <= y) {
-        hline(fb, c.x - x, c.x + x, c.y + y, color);
-        hline(fb, c.x - x, c.x + x, c.y - y, color);
-        hline(fb, c.x - y, c.x + y, c.y + x, color);
-        hline(fb, c.x - y, c.x + y, c.y - x, color);
+        hline_fill(fb, c.x - x, c.x + x, c.y + y, fp);
+        hline_fill(fb, c.x - x, c.x + x, c.y - y, fp);
+        hline_fill(fb, c.x - y, c.x + y, c.y + x, fp);
+        hline_fill(fb, c.x - y, c.x + y, c.y - x, fp);
         x++;
 
         if (d < 0) {
@@ -282,18 +441,28 @@ static void fill_circle_spans(Framebuffer *fb, Point c, int r, ColorRGB color) {
     }
 }
 
-void blip_fill_circle(Framebuffer *fb, Point c, int r, ColorRGB color) {
+void blip_fill_circle_ex(Framebuffer *fb, Point c, int r, const FillParams *fp)
+{
+    if (!fb || !fp) return;
+
     if (g_view == BLIP_VIEW_WIRE) {
-        blip_draw_circle(fb, c, r, (ColorRGB) {
-            255, 0, 0, 255
-        });
+        blip_draw_circle(fb, c, r, wire_color(fp));
         return;
     }
 
-    fill_circle_spans(fb, c, r, color);
+    fill_circle_spans(fb, c, r, fp);
 }
 
-static void fill_tri_spans(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color) {
+void blip_fill_circle(Framebuffer *fb, Point c, int r, ColorRGB color)
+{
+    FillParams fp = blip_flat(color);
+    blip_fill_circle_ex(fb, c, r, &fp);
+}
+
+
+// ++++ fill_tri ++++
+static void fill_tri_spans(Framebuffer *fb, Point a, Point b, Point c, const FillParams *fp)
+{
     // Scanline fill, top-left rule: rows [a.y, c.y) and spans [lo, hi),
     // so the bottom row and right end of each span are not drawn.
     // Edges are always evaluated top to bottom (smaller y to larger),
@@ -332,24 +501,25 @@ static void fill_tri_spans(Framebuffer *fb, Point a, Point b, Point c, ColorRGB 
         int lo = x_long < x_short ? x_long : x_short;
         int hi = x_long < x_short ? x_short : x_long;
 
-        if (hi > lo) hline(fb, lo, hi - 1, y, color); // hline is inclusive, span is [lo, hi)
+        if (hi > lo) hline_fill(fb, lo, hi - 1, y, fp);
     }
 }
 
-void blip_fill_tri(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color) {
-    if (!fb) return;
+void blip_fill_tri_ex(Framebuffer *fb, Point a, Point b, Point c, const FillParams *fp)
+{
+    if (!fb || !fp) return;
 
     switch (g_view) {
     case BLIP_VIEW_FILL:
-        fill_tri_spans(fb, a, b, c, color);
+        fill_tri_spans(fb, a, b, c, fp);
         break;
 
     case BLIP_VIEW_WIRE:
-        blip_draw_tri(fb, a, b, c, color);
+        blip_draw_tri(fb, a, b, c, wire_color(fp));
         break;
 
     case BLIP_VIEW_FILL_WIRE:
-        fill_tri_spans(fb, a, b, c, color);
+        fill_tri_spans(fb, a, b, c, fp);
         blip_draw_tri(fb, a, b, c, (ColorRGB) {
             255, 255, 255, 255
         });
@@ -357,15 +527,39 @@ void blip_fill_tri(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color) {
     }
 }
 
-void blip_fill_poly_convex(Framebuffer *fb, const Point *pts, int count, ColorRGB color) {
-    if (!fb || !pts || count < 3) return;
+void blip_fill_tri(Framebuffer *fb, Point a, Point b, Point c, ColorRGB color)
+{
+    FillParams fp = blip_flat(color);
+    blip_fill_tri_ex(fb, a, b, c, &fp);
+}
+
+
+// ++++ fill_poly_convex ++++
+void blip_fill_poly_convex_ex(Framebuffer *fb, const Point *pts, int count, const FillParams *fp)
+{
+    if (!fb || !fp || !pts || count < 3) return;
 
     for (int i = 1; i < count - 1; i++) {
-        blip_fill_tri(fb, pts[0], pts[i], pts[i + 1], color);
+        blip_fill_tri_ex(fb, pts[0], pts[i], pts[i + 1], fp);
     }
 }
 
-void blip_fill_quad(Framebuffer *fb, Point a, Point b, Point c, Point d, ColorRGB color) {
+void blip_fill_poly_convex(Framebuffer *fb, const Point *pts, int count, ColorRGB color)
+{
+    FillParams fp = blip_flat(color);
+    blip_fill_poly_convex_ex(fb, pts, count, &fp);
+}
+
+
+// ++++ fill_quad ++++
+void blip_fill_quad_ex(Framebuffer *fb, Point a, Point b, Point c, Point d, const FillParams *fp)
+{
     Point pts[4] = {a, b, c, d};
-    blip_fill_poly_convex(fb, pts, 4, color);
+    blip_fill_poly_convex_ex(fb, pts, 4, fp);
+}
+
+void blip_fill_quad(Framebuffer *fb, Point a, Point b, Point c, Point d, ColorRGB color)
+{
+    FillParams fp = blip_flat(color);
+    blip_fill_quad_ex(fb, a, b, c, d, &fp);
 }
