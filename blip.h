@@ -90,6 +90,7 @@ typedef ColorRGB (*FillFn)(int x, int y, void *ctx);
 typedef enum {
     BLIP_FILL_FLAT,
     BLIP_FILL_GRADIENT,
+    BLIP_FILL_DITHER,
     BLIP_FILL_FALLBACK,
 } BlipFillMode;
 
@@ -105,6 +106,13 @@ typedef struct {
             const ColorRGB *stops;
             int stop_count;
         } gradient;
+
+        struct {
+            Point origin;
+            float spread;
+            ColorRGB color0;
+            ColorRGB color1;
+        } dither;
 
         struct {
             FillFn fn;
@@ -155,6 +163,14 @@ static inline FillParams blip_gradient_v(Point origin, int h, const ColorRGB *st
     return blip_gradient(origin, (Point) {
         origin.x, origin.y + h - 1
     }, stops, n);
+}
+
+static inline FillParams blip_dither(Point origin, float spread, ColorRGB color0, ColorRGB color1)
+{
+    return (FillParams) {
+        .mode = BLIP_FILL_DITHER,
+        .dither = {origin, spread, color0, color1}
+    };
 }
 
 

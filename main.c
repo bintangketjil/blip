@@ -4,7 +4,6 @@
 #include "blip.h"
 #include "raylib.h"
 
-
 int main(void)
 {
     int screenW = 640;
@@ -36,6 +35,39 @@ int main(void)
         static int view = 0;
         if (IsKeyPressed(KEY_SPACE)) view = (view + 1) % 3;
         blip_set_view((BlipView)view);
+
+        float t = GetTime();
+
+        {
+            // float t = GetTime();
+            // float s = sinf(t);
+            // float c = cosf(t);
+
+            Point o = {
+                screenW / 2 - 100,
+                screenH / 2 - 100
+            };
+
+            int w = 200;
+            int h = 200;
+
+            Point co = {
+                o.x + w / 2,
+                o.y + h / 2
+            };
+
+            FillParams fp = blip_dither(co, 5.0f, BLIP_MAGENTA0, BLIP_YELLOW0);
+            blip_fill_rect_ex(&fb, o, w, h, &fp);
+        }
+        {
+            Point cc = { 100, 200};
+            int cr = 80;
+
+            float pulse = 10.0f + (sinf(t * 4.0f) * 1.0f);
+
+            FillParams fp = blip_dither(cc, pulse, BLIP_MAGENTA0, BLIP_RED0);
+            blip_fill_circle_ex(&fb, cc, cr, &fp);
+        }
 
         UpdateTexture(tex, fb.pixels);
         BeginDrawing();

@@ -7,25 +7,25 @@
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++
-// ++++ Bayer Matrices +++++
+// ++++ Bayer matrices ++++
 // +++++++++++++++++++++++++++++++++++++++++++++++
 static const uint8_t bayer4[4][4] = {
-    { 0,  8,  2, 10 },
-    { 12, 4, 14, 6  },
-    { 3, 11, 1,  9  },
-    { 15, 7, 13, 5  }
+    { 0, 8, 2, 10 },
+    { 12, 4, 14, 6 },
+    { 3, 11, 1, 9 },
+    { 15, 7, 13, 5 }
 };
 
-static const uint8_t bayer8[8][8] = {
-    { 0,  32, 8,  40, 2,  34, 10, 42 },
-    { 48, 16, 56, 24, 50, 18, 58, 26 },
-    { 12, 44, 4,  36, 14, 46, 6,  38 },
-    { 60, 28, 52, 20, 62, 30, 54, 22 },
-    { 3,  35, 11, 43, 1,  33, 9,  41 },
-    { 51, 19, 59, 27, 49, 17, 57, 25 },
-    { 15, 47, 7,  39, 13, 45, 5,  37 },
-    { 63, 31, 55, 23, 61, 29, 53, 21 }
-};
+
+// +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Global mode ++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+static BlipView g_view = BLIP_VIEW_FILL;
+
+void blip_set_view(BlipView mode)
+{
+    g_view = mode;
+}
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++
@@ -77,25 +77,34 @@ static ColorRGB gradient_color(const FillParams *fp, int x, int y)
     float f = t * (n - 1);
     int i = (int)f;
     if (i > n - 2) i = n - 2;   // t == 1 lands on the last pair
+
     return lerp_color(s[i], s[i + 1], f - i);
 }
 
-static ColorRGB dither_color(const FillParams *fp, int x, int y)
-{
-    float thresh = bayer_threshold(x, y, fp->dither.matrix_size, fp->dither.seed);
-    // Simple 50% threshold - could be parameterized later
-    return (thresh < 0.5f) ? fp->dither.color0 : fp->dither.color1;
-}
-
-static ColorRGB pixel_color(const FillParams *fp, int x, int y)
+static ColorRGB pixel_color(const Framebuffer *fb, const FillParams *fp, int x, int y)
 {
     switch (fp->mode) {
     case BLIP_FILL_FLAT:
         return fp->flat.color;
+
     case BLIP_FILL_GRADIENT:
         return gradient_color(fp, x, y);
-    case BLIP_FILL_DITHER:
-        return dither_color(fp, x, y);
+
+        case BLIP_FILL_DITHER: {
+            int ox = x - fp->dither.origin.x;
+            int oy = y - fp->dither.origin.y;
+            float distance = sqrtf((float)ox * ox + (float)oy * oy);
+            float t = distance / 300.0f;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+
+            float factor = powf(1.0f - t, fp->dither.spread);
+            int brightness = (int)(factor * 15.0f);
+
+            uint8_t threshold = bayer4[oy & 3][ox & 3];
+            return (brightness < threshold) ? fp->dither.color0 : fp->dither.color1;
+        }
+
     case BLIP_FILL_FALLBACK:
         if (!fp->fallback.fn) return BLIP_ERROR;
         return fp->fallback.fn(x, y, fp->fallback.ctx);
@@ -154,14 +163,6 @@ ColorRGB blip_get_pixel(const Framebuffer *fb, int x, int y)
 // +++++++++++++++++++++++++++++++++++++++++++++++
 // ++++ Draw ++++
 // +++++++++++++++++++++++++++++++++++++++++++++++
-static BlipView g_view = BLIP_VIEW_FILL;
-
-void blip_set_view(BlipView mode)
-{
-    g_view = mode;
-}
-
-
 void blip_draw_line(Framebuffer *fb, Point a, Point b, ColorRGB color)
 {
     // Bresenham line, all octants.
@@ -363,7 +364,7 @@ static void hline_fill(Framebuffer *fb, int x0, int x1, int y, const FillParams 
 
     ColorRGB *row = fb->pixels + y * fb->width;
     for (int x = x0; x <= x1; x++) {
-        row[x] = pixel_color(fp, x, y);
+        row[x] = pixel_color(fb, fp, x, y);
     }
 }
 
@@ -379,7 +380,6 @@ static int edge_x(Point a, Point b, int y)
 static ColorRGB wire_color(const FillParams *fp)
 {
     if (fp->mode == BLIP_FILL_FLAT) return fp->flat.color;
-    if (fp->mode == BLIP_FILL_DITHER) return fp->dither.color0;
     return BLIP_INK;
 }
 
