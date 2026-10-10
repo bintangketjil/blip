@@ -1,4 +1,5 @@
 old/
 ext/
+test/
 *.o
 main

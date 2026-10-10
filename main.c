@@ -56,17 +56,22 @@ int main(void)
                 o.y + h / 2
             };
 
-            FillParams fp = blip_dither(co, 5.0f, BLIP_MAGENTA0, BLIP_YELLOW0);
+            FillParams fp = blip_dither_n(co, 200, 0.6f, BLIP_MAGENTA0, BLIP_YELLOW0);
             blip_fill_rect_ex(&fb, o, w, h, &fp);
         }
         {
             Point cc = { 100, 200};
-            int cr = 80;
+            int outer = 40;
+            float r = (float)outer + (sinf(t * 0.5f) * 0.5f);
+            float core = 0.3f + (sinf(t * 2.0f) * 0.1f);
 
-            float pulse = 10.0f + (sinf(t * 4.0f) * 1.0f);
+            // float pulse = 10.0f + (sinf(t * 4.0f) * 1.0f);
 
-            FillParams fp = blip_dither(cc, pulse, BLIP_MAGENTA0, BLIP_RED0);
-            blip_fill_circle_ex(&fb, cc, cr, &fp);
+            // FillParams fp = blip_dither_n(cc, 80, 0.5f, BLIP_MAGENTA0, BLIP_RED0);
+            FillParams glow = blip_dither_glow(
+            cc, r, core, BLIP_BG1, BLIP_YELLOW0
+            );
+            blip_fill_circle_ex(&fb, cc, outer, &glow);
         }
 
         UpdateTexture(tex, fb.pixels);

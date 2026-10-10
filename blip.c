@@ -18,6 +18,30 @@ static const uint8_t bayer4[4][4] = {
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Hash +++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+static inline uint32_t mix32(uint32_t h) // murmur3 finalizer
+{
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35u;
+    h ^= h >> 16;
+    return h;
+}
+
+uint32_t blip_hash(int x, int y, uint32_t seed)
+{
+    return mix32(seed ^ mix32((uint32_t)x ^ mix32((uint32_t)y + 0x9E3779B9u)));
+}
+
+float blip_hash01(int x, int y,  uint32_t seed)
+{
+    return (blip_hash(x, y, seed) >> 8) * (1.0f / 16777216.0f); // 2^24
+}
+
+
+// +++++++++++++++++++++++++++++++++++++++++++++++
 // ++++ Global mode ++++
 // +++++++++++++++++++++++++++++++++++++++++++++++
 static BlipView g_view = BLIP_VIEW_FILL;
@@ -81,6 +105,30 @@ static ColorRGB gradient_color(const FillParams *fp, int x, int y)
     return lerp_color(s[i], s[i + 1], f - i);
 }
 
+
+// ++++ dither ++++
+static inline float bayer_threshold(int x, int y)
+{
+    return (bayer4[y & 3][x & 3] + 0.5f) / 16.0f;
+}
+
+#define GRAIN_SEED 1u
+#define GRAIN_AMOUNT 0.3f
+
+static ColorRGB dither_at(int x, int y, Point origin, float radius, float core, ColorRGB color0, ColorRGB color1)
+{
+    if (radius <= 0.0f) return color0;
+    int ox = x - origin.x, oy = y - origin.y;
+    float t = sqrtf((float)(ox * ox + oy * oy)) / radius;
+    float level = (1.0f - t) / (1.0f - core);
+
+    float jitter = (blip_hash01(x, y, GRAIN_SEED) - 0.5f) * GRAIN_AMOUNT;
+    float threshold = bayer_threshold(ox, oy) + jitter;
+
+    return level > threshold ? color1 : color0;
+
+}
+
 static ColorRGB pixel_color(const Framebuffer *fb, const FillParams *fp, int x, int y)
 {
     switch (fp->mode) {
@@ -90,20 +138,15 @@ static ColorRGB pixel_color(const Framebuffer *fb, const FillParams *fp, int x, 
     case BLIP_FILL_GRADIENT:
         return gradient_color(fp, x, y);
 
-        case BLIP_FILL_DITHER: {
-            int ox = x - fp->dither.origin.x;
-            int oy = y - fp->dither.origin.y;
-            float distance = sqrtf((float)ox * ox + (float)oy * oy);
-            float t = distance / 300.0f;
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
+    case BLIP_FILL_DITHER:
+        return dither_at(
+        x, y, fp->dither.origin, fp->dither.radius, 0.0f, fp->dither.color0, fp->dither.color1
+        );
 
-            float factor = powf(1.0f - t, fp->dither.spread);
-            int brightness = (int)(factor * 15.0f);
-
-            uint8_t threshold = bayer4[oy & 3][ox & 3];
-            return (brightness < threshold) ? fp->dither.color0 : fp->dither.color1;
-        }
+    case BLIP_FILL_DITHER_GLOW:
+        return dither_at(
+        x, y, fp->glow.origin, fp->glow.radius, fp->glow.core, fp->glow.color0, fp->glow.color1
+        );
 
     case BLIP_FILL_FALLBACK:
         if (!fp->fallback.fn) return BLIP_ERROR;

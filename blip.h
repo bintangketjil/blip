@@ -15,6 +15,13 @@
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++
+// ++++ Hash +++++
+// +++++++++++++++++++++++++++++++++++++++++++++++
+uint32_t blip_hash(int x, int y, uint32_t seed);
+float blip_hash01(int x, int y, uint32_t seed); // [0, 1]
+
+
+// +++++++++++++++++++++++++++++++++++++++++++++++
 // ++++ Types +++++
 // +++++++++++++++++++++++++++++++++++++++++++++++
 typedef struct {
@@ -83,7 +90,7 @@ void blip_set_view(BlipView mode);
 // +++++++++++++++++++++++++++++++++++++++++++++++
 // [X] fill_flat
 // [X] fill_gradient
-// [ ] fill_dither
+// [X] fill_dither
 // [X] fill_fallback
 typedef ColorRGB (*FillFn)(int x, int y, void *ctx);
 
@@ -91,6 +98,7 @@ typedef enum {
     BLIP_FILL_FLAT,
     BLIP_FILL_GRADIENT,
     BLIP_FILL_DITHER,
+    BLIP_FILL_DITHER_GLOW,
     BLIP_FILL_FALLBACK,
 } BlipFillMode;
 
@@ -109,10 +117,16 @@ typedef struct {
 
         struct {
             Point origin;
-            float spread;
-            ColorRGB color0;
-            ColorRGB color1;
+            float radius;
+            ColorRGB color0, color1;
         } dither;
+
+        struct {
+            Point origin;
+            float radius;
+            float core;
+            ColorRGB color0, color1;
+        } glow;
 
         struct {
             FillFn fn;
@@ -121,6 +135,8 @@ typedef struct {
     };
 } FillParams;
 
+
+// ++++ fill_flat
 static inline FillParams blip_flat(ColorRGB c)
 {
     return (FillParams) {
@@ -131,6 +147,8 @@ static inline FillParams blip_flat(ColorRGB c)
     };
 }
 
+
+// ++++ fill_gradient
 static inline FillParams blip_gradient(Point p0, Point p1, const ColorRGB *stops, int n)
 {
     return (FillParams) {
@@ -138,16 +156,6 @@ static inline FillParams blip_gradient(Point p0, Point p1, const ColorRGB *stops
         .gradient = {
             p0, p1, stops, n
         }
-    };
-}
-
-static inline FillParams blip_fallback(FillFn fn, void *ctx)
-{
-    return (FillParams) {
-        .mode = BLIP_FILL_FALLBACK,
-        .fallback = {
-            fn, ctx
-        },
     };
 }
 
@@ -165,11 +173,39 @@ static inline FillParams blip_gradient_v(Point origin, int h, const ColorRGB *st
     }, stops, n);
 }
 
-static inline FillParams blip_dither(Point origin, float spread, ColorRGB color0, ColorRGB color1)
+
+// ++++ fill_dither
+static inline FillParams blip_dither(Point origin, float radius, ColorRGB color0, ColorRGB color1)
 {
     return (FillParams) {
         .mode = BLIP_FILL_DITHER,
-        .dither = {origin, spread, color0, color1}
+        .dither = {origin, radius, color0, color1}
+    };
+}
+
+static inline FillParams blip_dither_n(Point origin, float size, float frac, ColorRGB color0, ColorRGB color1)
+{
+    return blip_dither(origin, size * frac, color0, color1);
+}
+
+static inline FillParams blip_dither_glow(Point origin, float radius, float core, ColorRGB color0, ColorRGB color1)
+{
+    if (core < 0.0f) core = 0.0f;
+    if (core > 0.99f) core = 0.99f;
+    return (FillParams) {
+        .mode = BLIP_FILL_DITHER_GLOW,
+        .glow = {origin, radius, core, color0, color1}
+    };
+}
+
+// ++++ fill_fallback
+static inline FillParams blip_fallback(FillFn fn, void *ctx)
+{
+    return (FillParams) {
+        .mode = BLIP_FILL_FALLBACK,
+        .fallback = {
+            fn, ctx
+        },
     };
 }
 
